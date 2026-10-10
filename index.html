@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Database Docs</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; display: flex; height: 100vh; font-family: Georgia, "Times New Roman", serif; color: #222; background: #fff; }
+  nav { width: 290px; min-width: 290px; overflow: auto; border-right: 1px solid #ccc; background: #f6f6f6; padding: 12px 0 40px; font: 14px Consolas, monospace; }
+  nav .title { font: bold 16px Arial, sans-serif; padding: 4px 10px 12px; }
+  nav a { display: block; padding-top: 3px; padding-bottom: 3px; padding-right: 10px; color: #222; text-decoration: none; white-space: nowrap; }
+  nav a.dir { font-weight: bold; }
+  nav a:hover { background: #e6e6e6; }
+  nav a.active { background: #dde8f5; }
+  main { flex: 1; overflow: auto; padding: 28px 44px 80px; }
+  .page { display: none; max-width: 860px; }
+  .page h1 { font: bold 26px Arial, sans-serif; margin: 0 0 28px; }
+  .doc { white-space: pre-wrap; line-height: 1.6; font-size: 16px; }
+  .welcome { color: #777; }
+  @media (max-width: 700px) { body { flex-direction: column; } nav { width: 100%; min-width: 0; height: 40vh; } main { padding: 16px; } }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="title">Database Docs</div>
+<a class="dir" style="padding-left:10px" href="#p1">Execution Engine</a>
+<a class="dir" style="padding-left:28px" href="#p2">Group by</a>
+<a class="dir" style="padding-left:28px" href="#p3">Join</a>
+<a class="dir" style="padding-left:28px" href="#p4">Order by</a>
+<a class="dir" style="padding-left:10px" href="#p6">Parser</a>
+<a class="dir" style="padding-left:28px" href="#p7">Create</a>
+<a class="dir" style="padding-left:28px" href="#p8">Delete</a>
+<a class="dir" style="padding-left:28px" href="#p9">Insert</a>
+<a class="dir" style="padding-left:28px" href="#p10">Select</a>
+<a class="dir" style="padding-left:10px" href="#p11">Repl</a>
+<a class="dir" style="padding-left:28px" href="#p12">Interface</a>
+<a class="dir" style="padding-left:10px" href="#p13">Storage Engine</a>
+<a class="dir" style="padding-left:28px" href="#p14">B+trees</a>
+<a class="dir" style="padding-left:28px" href="#p15">Buffer Pool</a>
+<a class="dir" style="padding-left:28px" href="#p16">Data in Pages</a>
+<a class="dir" style="padding-left:46px" href="#p17">Pages</a>
+<a class="dir" style="padding-left:46px" href="#p18">Pages Header</a>
+<a class="dir" style="padding-left:28px" href="#p19">Pager</a>
+<a class="dir" style="padding-left:46px" href="#p20">Toast Tables</a>
+<a class="dir" style="padding-left:10px" href="#p21">VM Bytecodes</a>
+</nav>
+
+<main>
+<div id="welcome" class="welcome"><h1>Database Docs</h1><p>Pick something from the left.</p></div>
+
+
+
+<section class="page" id="p2">
+<h1>Execution Engine / Group by</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+<section class="page" id="p3">
+<h1>Execution Engine / Join</h1>
+<script type="text/plain" class="doc">
+Join Clause 
+
+Join clause is most probably the clause which needs the most optimization, as it deals with millions of tables being joined with each other again and again. So, we pretty much need to be very clever and try to optimize it at the `ON` condition of the joins. `CROSS JOIN` is a different thing, but the rest of the stuff is pretty much covered by the `ON` condition, and we can optimize a lot at that part.
+
+So, let's start with the first point itself, taking everything from the parser to a special data structure created for it. The structure goes something like this: the `FROM` condition for each of the columns is made, and if a join occurs, we can get it as a proper structure since the structure is already present. One issue that currently persists is that it kind of works with only one join. When multiple joins are involved, it breaks, so that is something that needs to be worked on.
+
+The structure basically contains the `FROM` name, the `JOIN` name, and the `ON` condition. The `ON` condition can further contain the left-side stuff and the right-side stuff. So, all of this is already handled by the `from_parser_to_struct` kind of structure. The structure itself remains the same for getting things from the parser to it, so I am not elaborating much on that here. If interested, you can read about it from the very first conversion in the main engine's documentation.
+
+Similarly, the `if` in the raw function solver, `join_func`, remains pretty much the same as well, except for the data structure changing.
+
+Now, let's consider the case where the `ON` condition consists of an `=` condition, something like `a.id = b.id`. Here, the best thing we can do is hash out the columns based on one thing, and then whichever of them matches, we perform the join operation on it. Pretty much, that is the thinking behind this approach.
+
+This is covered in the function `join_equal_clause`. Here, first all the hash bins are created, which contain all the information like the actual value, the primary key of both the tables which are joining with each other, the number of entries, the row number, the table name, and other required information.
+
+Now, why the primary key? The main thinking behind this was that we get the columns which are similar and the compare values of them, but to actually get to those values and move our cursor to them, we need to use the seek functions in the bytecodes. For that, the tree needs to be sorted, and trees are sorted according to the primary keys. So, the involvement of the primary keys becomes kind of important here.
+
+Coming back to the main function which handles this equal clause, we pretty much need to get all the tables which are involved in the conditions, initialize the cursor, and move the cursor according to the condition that is present. There is also one special data structure created in `select_info`, which contains all the information about the number of tables, all the hash-related information, and other required details.
+
+We then call these functions and make sure that whatever columns and tables are present need to be called only once. This is where the hash is used. In the main function, we take out the tables which need to be joined and take the primary keys of those tables. Then, if the tree is extending either to the left or right of the root, we take that information and put it into the hash. We use the bytecode for this operation. The same thing is done with the column name, and the extra column is found.
+
+Coming to the bytecodes, this is where all of these things are actually done. In the hashing part, we pretty much put all the required details into the blob and then pass it. Here, the number of hash bins is calculated using a special formula. Then the primary keys of both sides, the row number, and the table name of the compare value are picked from the required data. The hash cursor is then given in the bytecode and the operation is performed.
+
+Once we get the data, the whole blob is opened and we call the function `hash_bin_which`. This function simply assigns the hash bin for the data regardless of the data type it contains. This is how the whole hash table is created for each of the required things present on each side of the `=` condition.
+
+'tables_and_their_hash_cursor_num' and 'tables_and_thier_cursor_num' these are the main responsible for getting the table numbers of the every table which are present in the exprtession so pretty much like the first we do the hash for the stuff and as per it we have the counter we just get the mod of the current table number  with the number of tables present and then give it 
+
+
+Okay lets have some attention towards the inequality present in the on condiotion now normal hash really fails very badly here so need to like get some better appprach so the see we are playing with the ranges in here the most maximum number and the most minimum number in the row we track them we get the range of it and then operate on those ranges and at the very end we just get the ranges with respect to the tables which we are joining and then like we just move in that range only the function 'get_the_max_and_min' works the same thing what it does is takes all the tables and the columns which are presen tin the thing and then goes accross all the rows and find the minimum and the maximum and then store them easy as that loop over the tables get the min and max through the bytecodes aggregate functions and use it later on 
+
+Okay stuff gets intresting from this function here 'take_care_of_expression' okay so the basic thinking in here is liek if the expression comes in the inequality any side we pretty much need to like get the ranges with respect to both the tables which we are going to join up with so we first give the target of the table in here we go to the entire leaf of the tree first and then as we start getting the tables and the thier columns we get the range first and then operate them and if the last table is remaining at the point we just need to like stop everything present in there and then like solve the inequality as per the table in that one and get the range for the table now one of the easiest approach could have been liek jsut trakc from the top and as soon as you get the very first table for the thing which hits for the target table number and solve with repect to it not quite the issue comes with the recursion you cant get the proper communiation in between and i kind of felt this was a eaiser manner than doing that so yeah the same stuff is done for the extra col and the normal columns and if just the normal column is present the recursion brings up the stuff and then work on it and also if the columns are not present just the plain data present we can also work for it as well now it pretty much gives up the the register 1 the register 2 which contains the answers and then if the extra col is present or not the binary variable for that is also there 
+
+cool we got the expression now which we know exactly which side of the camparing function does the last one last so pretty much we pass that part of the tree and then take a map of the ery first table found and then use that map for reach to that one while solving the inequality 
+
+one more side functipn is checxking if the range we have is negative or not cuase if the range comes in negative we pretty much need to chang ethe inequality sign in certain conditions two varients if expression 'check_if_the_stuff_negation_or_not' and for normal one 'check_if_the_stuff_negation_or_not_without_solver' 
+
+now see we pretty much have the solved partial solved version ( range ) the map of the target which we have and the know which of the side of the inequality is the target lying so that way now the function 'found_the_target_to_be_deplished_solve_it' gives the final range for the target table so first checking which side the target lies if it is right we dont have the solved version of the left side so we need to solve that first and then move forward now ofc if the expression is there we call the fucntion or is only the normal data is there we directly get the data okay now we come to the main thing we earlier mapped out the entire of the route which is like the target table so now the we pretty much go in the loop they are in the 0 and 1 as the stuff is binary if the thing is on one side the opposite side is completly safe and can be directly solved and get the range of the thing ( if data normal range if equation the solved range ) and then we check if the thing is negative or what if negation in the cases of the * and / the campare function. inverts so we need to do it and then the range which is gotten is then transfered in the another side and solved it accordingly and get the range till we reach end of the tree finally we get the calculated range , the target table and column and the inequality and similarly the same functions are done for the left side just the finding what the data is on the right side we dont need to worry about cuase that data is passed in the function and solved similar way 
+
+Now main mapping of everything is done in the function 'join_inequality_clause' here first all the tables are gotten hash si done we get the cursor numbers and then intialise all of them get the primary keys of both the target material  , the ranges of all the columns is called in here and then the main tree stump is in this part itself we first put the whole process presented on top for the left side and the right side of the tree and if the thing is there for the we just do the above process else just take the normal data if present and work on it and now once the whole thing is done we get the whole range of it we just check up the if the table and the column selected is the primary key or not cuase if the thing si primary key we dont need to do the operation gt_op for finding the exact stuff directly plain search o(1) and done .
+</script>
+</section>
+
+
+<section class="page" id="p4">
+<h1>Execution Engine / Order by</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+ <section class="page" id="p1">
+<h1>Execution Engine </h1>
+<script type="text/plain" class="doc">
+ Main Execution Engine 
+
+Moving forwad for th compile select this is the main function where the whole compilation and the execution of all the queries and functions are pretty much called here so yeah i had kind of had 2 versions of it the first one was kind of made thinking there would be no join function and yeah these son of a bitch have so much of power that it liertally needed me to make a freaking new compilation thing itself so yeah pretty lets go thorugh the structure at first.
+
+See the very earlier this function is called after the from and the join functions are completly done now at this point my join just supports the two table join only so yeah entire of the strucutre is kind of dependent on that part and yeah so pretty much we start with the registers from both the tables the columns are gotten as the cursor is moved before it and the tables names and then the thing is the groupby kind of changes a lot of things here as well so things are parted here as well.
+
+So like the liek suppose the orderby comes in the play then it have two very different roles liek the groupby only the main things which need to be printed only those are sorted and in rest everything is sorted so pretty much need to like make a segregation over there then we kind of enter in the the stuff.
+
+Now we pretty much need to make the ready the sorter if the orderby exists else just moving forward with the where clause like if the condition exists then like just move forward else just jump forward.
+
+Well here the thing is i had my brain stuck for a while so see liek the eq_op is used if the registers match it jumps to some of the steps else it dont so pretty much like right before the funciton is ending we would make it jump there if the condition is not fullfilled.
+
+Anyways moving forward see if the operator is not there we kind of directly need to get the stuff so pretty much liek the registers which we got earlier which are passed just check whicvh table they belong to and then like just get the stuff in the register.
+
+Now here it can be the columns of the some table or it can be just normal values like string or integer something like that so pretty much need to like take care of all of it and if the operator is presen tyou pretty much need to like put it in the function which would solve everything up.
+
+Lets quickly go to the func which solves the whole expressions comes in so first we pretty much catch what the operator is and which operator to put in the bytecode and execute them.
+
+Now we kind of multiple instances in here like the first one like if the left and the right are null so pretty much if the operator is not the aggregate function or isnull is there the extra col and the normal col is going be present so we pretty much take them operate and return the value and as the aggregate functions are kinf of handled in another function ill come on it later on so no worry about it.
+
+So yeah comming on the part two here like the one of them is not null and one is null so its like where the one of the thing is the just the column but the next one is the operator and the euqation kind of gets repepated so recursion in it and if both of them are present then simply just do the recursion easy as that.
+
+Okay so pretty much as soon as we get the aggregate function in the thing we just initialise it and then put them in the the things are put in the aggregate data structure and then liek we iterate till we dont reach the end.
+
+Now ofc there is the col name involved in it but there is a possiblity of having the aggregate function just on the equation or something liek that.
+
+Lets hop to the main compilation file right so once we get the data if the orderby is not there we directly make the record of the stuff else we need to get all the stuff all the equations and all the columns in the orderby.
+
+So now i have designed it like take the stuff make the record of ti and then put them in the sorter and then right after this we put the where clasue jump conditon if the thing is not matching just jump to this one.
+</script>
+</section>
+
+<section class="page" id="p6">
+<h1>Parser</h1>
+<script type="text/plain" class="doc">
+Parser
+
+So basically we get queries right, just plain text, alphabets, nothing special. and we need to make sense of it somehow so what we do is we first tokenise all of it, break it down into actual words and symbols that mean something, and then we take all those tokens and build a tree out of them, an AST, which just makes it way easier to actually run the query later on.
+
+
+
+Tokenizer — this runs first, always. takes the raw string and just chops it up into pieces the rest of the parser can understand. nothing else works without this.
+
+Select Parser — all the select queries land here. what columns, which table, what conditions, all of that gets figured out and put into the tree properly.
+
+Create Table Parser — this is where you define a table, the columns, their types, how many bits, all of it. basically the whole structure of the table lives here as AST nodes.
+
+Insert Parser — once the table is defined you gotta put data in it right, so this takes whatever you're inserting and builds that into the tree too.
+
+</script>
+</section>
+
+<section class="page" id="p7">
+<h1>Parser / Create</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+ 
+
+<section class="page" id="p8">
+<h1>Parser / Delete</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+ 
+
+<section class="page" id="p9">
+<h1>Parser / Insert</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+ 
+
+<section class="page" id="p10">
+<h1>Parser / Select</h1>
+<script type="text/plain" class="doc">
+### Parser
+
+The next part in here is the parser see we posted some queries now what to do with it we need to properly stucture it right so now the thing we do is the very first thing to do is we right now just have the normal character floating out we make the strings of them and then store it out so that we can figure out what to do next about it the same is need to be done for the data which we have present in the thing we keep it make it as a grid so then like if we want to assign something we make it so this is tokenizer.
+
+So see one curcial info is I am making the whole backend for the csv files cause its relatively easier to work with. So probably for the other files I might make a changer of it so yeah its like that.
+
+### File Rendering
+
+One issue which was extremely hurting my eyes was about the files we load those stuture dont look good in the a proper structure for the thing the lined stuff is needed so yeah I the best thing is to get the data which we go and then scan in the entire column that if which of the size is the highest and record that and then add that much of the spaces in the part now it looks easy but trust me it took entire day of the efforts for doing it.
+
+And the reason was I was trying to do like in 1 iteration itself like record the highest one and then add the character thing for the spaces and then bring them to one line but then the issue was first we iterate thorugh our row by row so then the thing kind of breaks number 2 the first one can be solved but getting to know where exactly to put the space is also a huge problem it always gets curropted now matter what and then next one the data in the render is far more different than the one which we get in the grid.
+
+So then the problem is pretty common so then the best thing to do is just record all the highest size of all the terms and then record it in a array and then make a string and then add all the spaces and the data which we have with us and then maker it for each of the row and then put the string in the row's data and like that the thing gets updated it was just highly painful to make all those segmentation errors and bus errors really were a problem.
+
+### Meta Commands
+
+The next part is about the meta commands there are several meta commands like `.help` or `.save` or `.load` or more like those these are complete different than the normal sql queries so we need to make them aligned here or make them separately.
+
+Okay we go on e by one then the first meta command is the tables once we do it we gt all the tables all the headers we see it so now as we Excel so showing those was a problem I could have added them to the status messege but its limited cant be shown fully and also I could have just highlighted the part but I got to know about a a popup window for the terminal a pop up window appears you can just just show the contents over there and then as soon as the key is pressed the window is closed so I am making use of it as it is not curropting any of the data as well of ours so yeah.
+
+### Assignment
+
+After the meta commands there comes the assignment stuff like for example A1 = =AA1 like these of A1 = 20 we can generate formulas out of it and then update our data from it so a simple version I took just take all the string and then check out one by one how the things are present in the string and then operate on it like first check the assigning rows and columns and then look for the goods of them and then also if only 1 = is there then its a direct assignment but if there are = = then there is a formula which is to be given to the thing and then that formula generated answer is been given.
+
+Then now also one thing is needed to be noted was if the size of the new assignment is more than the max size then entire thing needs to be reset and then again the entire of the structure is need to be made the excel like function is needed to be called but if the max size is not changing then there is kind of no need then just operating on the one line is enough of the work so a new function is made for the same purposes.
+
+A detailed view about it first of all we need to fetch the coordinates of the grid which we intend to change so simple till we don't hit any of the seperator we catch the things and then we push it to a separate function whose only work is to get the string and then give out the coordinates simple logic till the character is not number add those numbers and then till the data is number get those and then give out those numbers for the checking.
+
+Now if you see there are two types of assignments first is just passing the things maybe string or maybe just a number so first of all we need to check how many of the = are there in between and if they are found more than 2 its a error so we don't move forward with it and and if 1 is there then its a general assignment so we then assign whatever is given directly to the first component.
+
+### Formula Assignment
+
+Intresting part starts from here now there are 2 types in here first assigning a grid component itself or perform operations with it generate formulas with it and then assign it to the thing so see we have multiple word here see if there are formulas like SUM/AVG then these can just be assigned to the numerical data only and if the data is string then its a problem whereas for the strings only formulation possible is concat for this version maybe in next version definitely add more and obv if any numbers come when there are already words present then the there is data problem so we directly move outside cause its a problem.
+
+Then the course of action goes like if these functions are called we need to check the range of it as well so then checking it and then receiving what data is it we do it I made another function which handles this work as well. and obv general data or numbers come we store those as well and if the coordinates are given we unpack it and then store it in a place same with the separators as well we go on storing all of them and after the string ends we now have all the operators and operands.
+
+So I made a calculator one ( i took the code from the leetcode question basic calculator I solved it earlier so didn't felt like making it again ) so yeah those functions solve all the numerical data and give us the final string which needs to be assigned to the first grid component and same as with the strings a different function although here its just concatenation so yeah not that huge issue.
+
+Also few function I made for making the life easier was a data_int which like converts all the decimal / normal numbers string to numbers and give it back and there was one execute commands which like for the functions like sum and those stuff it takes the ranges and then execute and give us the computed work.
+
+Also right now its just the made up for single component assigning itself would attempt to make it for full rows as well but later on versions ( I kinda wanted to focus more on SQL -LITE ) and I just thought adding this one feature would be awesome so yeah I did it.
+
+### Errors and Fixes
+
+I love to share some of the errors as well I commited as well so the first one was like in the data_int string to the numbers first of all the '.' Checking was in the loop where like it was !seperator(buf[I]) which means it was never meant to be true and one issue was if there were some space involved in the thing there was no checking for it which was really sucking the entire function as there were no facilities for it and there were clear instructions that if some kind of seperator comes in between directly give out error so yeah I faced a ton more of errors cause of it.
+
+Second one was in the woods see the thing was I was just adding up the alphabets but for correct version we need to multiply the previous one with 26 so that we can get the correct version and the second issue was some errors which I faced in text editors as well see for the getting the x coordinate we need to count the columns and for the y coordinate we need to count the rows so its inverse equation kind of stuff and I was passing the it wrong way so there were issues with that one as well and trust me this was the huge problem cuase then the entire of the execute commands was in problem cause all of these things were inverted.
+
+Comming to the main function of these engine was assign see the first was if the string is empty then entire function would run so first to check if its just empty string or is there something in there so yeah adding that one was important.
+
+Now in the between the 2 assigning terms there are = signs so the thing I was doing was I was over complicating it because of which in few cases it didn't even worked well its kind of simple enter the thing only if you are space or = and then go on so yeah I simplified it when we camera to earlier versions.
+
+Okay comming on a one problem which I am doing every time right now is freeing things earlier to assign the thing so see when we are like assign the new values to the grid I was freeing the thing the issue is now we are allocating the data itself and not the address so the heap gets curropted and we get segmentation fault and the same problem was in the found == 2 as well so yeah also comming back the found == 1 I also added a while loop before going in the function which passes all the spaces in the thing so that we get correct malloc size to our buffer.
+
+### Found == 2
+
+Comming to the problems in found == 2 here the issue was see there are three data storages 1 . Operators 2.strings 3.numbers and here the thing was I using a same pointer for appending the stuff in strings and in numbers which was a huge problem if the thing like a column where a number is updated or assigned later on and then we try to make the string operations so the we have to take a new pointer i wanted to reuse it it got heavy on me haha and then also added few more edge cases like buf[I] != '\0' cause what if there is none its a problem also I added the string of the numbers to the data ( string one ) just incase needed.
+
+Similar kind of mistakes were there afterwards as well.
+
+And then the major one see before entering the function itself the problem was:
+
+For eg you wrote A1 == A2 + A3
+
+Then it was giving out all of them one by one and then calling the function which was causing the problems so then I had to make the entire loop changes before it was directly passed through the proper_data.query now it was like edit.ri was been passed for the thing and also checking if all of them were space line or not that check is kind of important so yeah it is done as well.
+
+One of minor mistake which caused me problem was there was this dataint thing there the seperator was passed & this was not defined in the seperator function so its was trying to find the integer for the & as well so yeah kind of boo boo hey.
+
+### Main Parser of the Queries
+
+okay comming on the main parser of the queries the select commands see its quite straight forward okay first matter of action.
+
+We need to make a tree ast for the all the query we write here so that we can work on it so simply we make a tree with the nested trees children and we store all the syntax termms all the words everything in it.
+
+### Nested Queries and Expressions
+
+okay lets talk about the nested queries as well see there is possiblity that we have query inside the query so we need to catch it up so simply first we need to fetch the end of the row and the end of the column which is whereever the bracket fulfils the criteria till there we add the things and then directly put the nested loop for the select queries.
+
+Now see there aare two things which can happen once the ( comes first the if the next term is select we go for recursion but if its not then its probably a expression or a display of the terms specifically so first we check the priority of the thing if there is presnet its quite clear for the expression but if its not we then look for the next term if its the pirority then also we need to go for the expresison.
+
+I faced a lot of issues in here simply cause of the the thing was like the first operand was declared as the leaf and then once the priroity gets true the tree was formed with the operand being not present which leads to the not making plus errors as well so yeah it was like a good safe gaurd and if none of it is getting true its just a leaf make it a leaf and then move forward.
+
+Now see here we are in the loop for the strcmp(buf[i][j] , ")") != 0 so the continue was not at all needed here ( in cases see there is the while loops which like as soon as it ends we need to put the conntinue else we would lose that word beacuase of the auto increment in the end ).
+
+### Expression Tree
+
+see we often have the expressions used liek a+b AND b*c is not null so here a proper tree needs to be formed with the thing so a function is been made for it which picks up these makes the node and then we add the operators and the operands in the stack and as per the operators come we look for the prioirty of the operator and as per the priority and the number of oeprands needed we pop it out and make a proper tree out of it simple as that and in the end added the flush if the same priotity of the operators come then to safegaurd them as well so yeah.
+
+The errors i would love to speak about were everywhere the issue of the != and strcmp was there i kind of used it eveerywhere had to change everything and then in the expression more the issues were like i like hardcoded the thing like see != are two different seeprators but they are cosdiered as one the same manenr like is null or is not null like these how different these are i kind of have kept it like hardcoded if both are the pirority ones then attach it directly which kind of backfired.
+
+Let me give you the example like is null is there now here the null is considered as the part of the thing but at the time of liek != null here the null is a operand here which was getting kicked of so yeah a problem also the issues came with the number of operands to be taken as well few of the functions dont take 2 operands whereas i coded it that way for same to each so it was breaking so had to like complelty define the thing for the specific functions giving us what the amount of operands need to be considered.
+
+And then one more function which i kinda of didnt condidered here was the nested queries i didnt really thougth it would be used but yeah it was a bit important so i added that as well a smaller bug as well whatever the recursive funcrtion which were called werent check with the null so had to add those functions as well.
+
+And the biggest issue here which caused a hell lot of headache to me like the insanity of headache was the i was adding the select queries in the expression tree but instead it was needed to be pushed in the stack which kind of cuased a hell lot of trouble to me it also cuased infinite loop as well plus the tree forming was also wrong there plus the last thing of operand needs to made null as like in the stack we only playing with the top variable right so the null is very necessary as rthere are condition regarding it so yeah that was it.
+
+It also didnt supported alright the thing here was the it didnt supported function as well had to do that one as well simple logic look out for all braces inside of it initialise at 0 and add a bool tag as well for just checking that atleast one of them is present or not so yeah had to add this one in the expression and then also after the exprerssion function were called outside the while loop of ( cuase it stops when hitted to the ( but when it like in the while loop and then we hit some of the syntax then there was no continue in it as it may go ahead of it so yeah small thing cuases huge huge freaking problem.
+
+Onto the next one see in the function if we need to call the node which needs to be passed was also a big problem as well which was caused like if the prev_tree where empty then we needed to liek pass a null tree and then make the tree and join it and if the normal conditions where there no problem it was the same so yeah.
+
+### SQL Functions
+
+see we have the functions very comman the sql like count sum avg and so these need to properly insterted in the ast so simply created a function made the main node of the thing 2 steps ahead cause we need to avoid the braces and rthen we go inside so simply there can be expressions in the thing or there can be nested queries so we need to manage those so yeah added them loop goes on and we get all of them covered so yeah not much to talk about this one straightforward as that.
+
+Errors were also like normal " and ' these ones and the null werent taken in the account nothing that much of major so yeah.
+
+Only one major issue ill tell here was just the see the issue was if the first thing is not the operator with the priority but if the next one is the priority is true then it needs to be covered inside the operator so we simply needs to push the thing in the expression if the next thing is the priority thing similar problem was present in here as well for the continue.
+
+### CASE Expression Tree
+
+okay onto the case expression tree see we have the case syntax for example case '' when '' then '' else '' so simple thing there can be the expression or the nested query in the gap only thing is following the syntax correctly so see firsrt case is the boss and then all the when and then reports to case but if there is then in the space of the when then it makes a new tree from there and then adds it to the when simple is for that i had to store each of the tree inside a array of trees so then keep the track of all the nodes which pass through the when and else and then as soon as we hit the then then we just make a new node and then pass the temp to it cause already our temp is set to the when when we enter the thing also the nested case is possible so added those things as well.
+
+About the errors i forgoted to added then and then it was more pain to get it covered again and then it hitted infinite loop as well for not adding the conitnue in the after the then see you can see how naive the problems or bugs are but trust me when the code is so freaking huge it kills entire eyes to patch them up so yeah.
+
+### comp_1 Function
+
+okay finnally on the comp_1 funtion see it was made for the part where ;- select '' from only this much part can be function can be nested loop inside can be exprssion those stuff where and stops at from the from was taken care in the main function so not a huge problem about it few of the problem came same i stated it in top majority of them were the same only new one was the * one.
+
+See if the select * from so if * comes in the thing it instantly crashes as it supposes it as a multiplication * and then starts to look for the operands whereas there are none of them only seelct is there and select is definately not defined so giving up nothing so yeah it was solved.
+
+And so one of the most classic mistake or rather the testcase which i didnt really took in account was see if we enter the ( thing we need to go till the most endest ) is not achieved i was simply doing it which kind of bad let me explain with a example see ( a * ( b+ c ) * d ) so here by the earlier methos we did covered till where to go but the most purest form of the equation is needed for the expression.
+
+Now you may think that this could have been never happened if we go in the expression and then recursion could have fixed it nope the start and the end are kind of fixed it goes in infinite loop so not relly a good idea for it.
+
+### FROM, WHERE and JOIN
+
+as soon as we cross the from we goes to the next part which is from '' where so in between the nested queries can come the join can come normal expression can come so yeah same as the comp_1 i dont wanna convey that much again just the new thing of the join.
+
+So see let me give you the normal thing see we have multiple varianets of the join and then tthere is the on with the join now those are valid for all of the other but not the cross join so the same procedurue of the comes the normal again but one thing is different here see we have the union thing for this one if the union comes then in the ast these function directly gets attached to the union node else to the normal temp which is going in the thing.
+
+And then lets move to one of the issue worth telling was the on thing see as i mentioned ealrier the on and the cross join is not really possible so see also the issue is on comes in the prioity which we have in the expression function so i was taking that condition inside the loop of the expression and as the on wqas in the priority it was breaking everything as the operands werent clear either all the logic failed fix was quite simple simply take it out of the loop 1 arrow 2 kills killed entire programe itself haha then there was issue in the increment small one not worth honestly so yeah.
+</script>
+</section>
+
+ 
+
+
+<section class="page" id="p12">
+<h1>Repl / Interface</h1>
+<script type="text/plain" class="doc">
+Flux DB — Terminal Database Client Interface 
+
+So this is the whole Flux DB thing, its basically a fake terminal-style database client built on top of Python's tkinter. 
+The whole app is one class `NumesApp` that extends `tk.Tk` directly so the window IS the app, no wrapper or anything like that.
+
+The UI is split into two parts — the top bar which has the file input, password field and the connect button, 
+and then the big `tk.Text` widget below it which is doing the whole terminal illusion. There are two text tags,
+`dim` for grey and `normal` for white, and a mark called `input_start` that separates the read-only history above from the live input zone below,
+and pretty much all the key bindings are just protecting that boundary.
+
+The connect flow just flips an `authenticated` bool and stores the filename, no real auth happening, the password field is a placeholder for now. 
+Once connected, hitting enter routes backslash commands like `\help`, `\nodes`, `\status` to the meta handler and everything else goes to `execute_query`
+which is a stub outside the class that just pattern matches on the first word of the query and returns hardcoded responses.
+
+History navigation is standard shell style, up and down arrows cycle through a list and `history_index` tracks where you are, `-1` meaning you're at the fresh prompt.
+
+And yeah that's pretty much it, the `execute_query` stub is the one thing that needs replacing when the actual database engine comes in, rest of the UI machinery stays the same.
+</script>
+</section>
+
+ 
+
+
+<section class="page" id="p14">
+<h1>Storage Engine / B+trees</h1>
+<script type="text/plain" class="doc">
+B+ Trees
+
+Insertion 
+
+This is the router for all the data. For example, we saw that the Pager just stored all the information, but the information about the Pager is kept in this one. The primary key is the representative for this one, and the offset of the file and the slot number are the additional information which are required to access the thing.
+
+Let’s have a very basic overview of the structure of the B+ Trees. There is the data, the one I was talking about above. These are considered as leafs, and the ones which are above them are known as internal nodes. The internal node consists of all the primary keys used by all the children so that we can route, and the next one points to the right next struct directly, and then we can get the thing.
+
+Coming to the main function of the B+ Trees, it is the insertion of the data in the thing directly. So, the very first thing is to note down the path with which we need to go through all the nodes and which index number it is in the thing. We store it using binary search on each and every node which is there in the parents, and similarly, we get the index where we need to put the data at the leaf as well. We then move forward to insertion.
+
+The best case is if there is space in the node. Each and every node has a max capacity to hold the data, which is just 340. So, if there is some space, we put the data directly in the thing and update the counters in the struct.
+
+If not, then it is quite a big thing. First, let’s go through the logic which I had in mind. Pretty much, we have the stack with us having all the nodes where we need to put the data, and now we just see that we are at the leaf and we need to insert the thing in it. So, what we do is we go up in the tree, up in the parents, using the bottom-up approach first. Then we just update all the representatives which are there at the top, which is the middle of all the primary keys which are there in the struct. We use them and then go up, put the updated representative in the upper parent, and then move forward the same way till we reach the parent which has some space for splitting the data.
+
+So, till the way up, the representative which stayed, we just put there, and then from there we just go from the top-down approach. We go on splitting all the nodes which we have in the stack, and then once we reach the end, we split the data as well and then insert the data. And if there is just no space in the entire stack, we need to make a new one and then put all the data in the thing and then move forward with the similar approach as I conveyed above.
+
+Now comes the main issue. It doesn’t work pretty much like I am facing segmentation errors everywhere. The issue is in the stack and the indexes which we are handling. Somewhere the pointers are gone and I just can’t find the solution. So, I have quoted the code and probably raised an issue as well. If someone is curious and wants to fix up the thing, here is the approach, and I am noting down what exactly was in my mind while doing it exactly below.
+
+As I said about the bottom-up approach, the representative is updated every time. We use the variable which tracks the representative which needs to be the thing, `catch_which_to_put_as_parent`, and go down the stack. Then we start the main thing. We start a loop which goes from the index to the size of the stack and move across them. The first thing we take is a temporary variable which uses the node as per the way we move in the thing.
+
+Now, if the thing is 0, meaning the very first or the newest node which we made, we select that one up. If not, we just pick the current one and move forward. Then, about the turner, it is like this: once we find the space in the node to go forward, we have to rearrange all the stuff, all the primary keys, and then insert our last representative and move forward with all the rest of the iterations. This thing is not used for obvious reasons.
+
+Then we start making one temporary half node which we transfer all the nodes or children into, and then merge it up with the main branch later on. So, we start by copying half the primary keys into the new node. Then, if the node is not the leaf, meaning it does not have any children and it has the data, we just split it up and add the node to the parent.
+
+Pretty much, we make another new temporary node. We go a bit back to the parent for the current split node and then pick the node and add the new half node, and then move forward. Also, we need to update the stack as per any of the nodes which are there. So, we have the index term stored up for every node. We just look in which of the nodes it lies and then put it in the stack and move forward. My thinking is that we directly update the pointer node, so no external work is needed. That was my thought process.
+
+Now, moving to the else version, if it is the data, the normal data, we just need to go one node earlier and access the parent of the current node, as it is the one who controls all the child nodes, and the data is just the data in the thing. So, we go one earlier. The same way, we split up all the things, the primary keys and the data, and then insert the newer one in the thing. Done.
+
+This one is quite resolved now. The issue was the same: I was using the stack thing to change the stuff, and the pointers were the issue in here. So, pretty much, the thing was simpler. The whole logic is the same, just a few of the unnecessary conditions which I had put in were not needed. The main splitting logic covers that one as well, so I removed it.
+
+Then I just used only two variables. The one which takes care of the internal node, which we just use, and we track that one up. Also, while splitting, we just use that one and add stuff in it.
+
+Anyone reading this, AI doesn’t understand the logic or even when we give the approach, it doesn’t. So, it is quite the thing. Just give the whole working process of it and then give AI the code for debugging it. It may give something similar.
+
+
+
+
+
+Deletion 
+
+
+Coming to the deletion of a key in a B+ tree. The first thing to check is whether the node we are deleting from still satisfies the criteria after the deletion, which is that it must hold more than half of its capacity. This matters because nodes that are mostly empty are of no use, and traversing them is not optimal. If it doesn't fit the criteria, we look at the next node. If the next node satisfies the criteria, we borrow one entry from it. Otherwise, as the last resort, we merge the two nodes. This is the main logic behind everything.
+
+We begin by traversing down and pushing all the nodes on the path into a stack, so that we can move through the tree easily later. We also keep a counter with us, called the first alarm. It checks whether the key we are about to delete is present in any of the representatives (ancestors), and if so we store that position. This traversal takes us to the leaf node. There we find the index of the key to remove and shift all the primary keys and data by one position. Simple.
+
+Now if the current node follows the criteria, we move on. Otherwise we need to fix it.
+
+If the next node is null, we are at the rightmost part of the tree, which is an edge case we need to take care of. Here we go one node back and check whether the previous node has enough data. If it does, we borrow one entry from it, bring it to the rightmost node, and update all the parameters. One thing I always feel needs to be done: if the entry we borrow is a representative at any ancestor level, we need to treat it carefully, because if that key is directly maintaining the boundary between two nodes, deleting or moving it would be a disaster. If the stale key is simply kept, it is not really a problem, but why risk it. So the easy way is to update all the representatives after shifting, using the middle term of each, and then move on.
+
+If the previous node doesn't fit the criteria either, we merge. Since we are moving backwards, we don't need to worry much about updating the representatives. We just merge them, free up the rightmost node, update the structures for the edge cases (discussed further below), and move on.
+
+That was the rightmost case. In the normal case, we are at the node and we pick the next node on the right side. The direction reverses here, so we first need to refill the stack for the next node, from the start to the end, because we need to change the representatives heavily.
+
+If the next node follows the criteria, we borrow one entry and update the representatives similar to the earlier case. The difference is that we now update both paths, the first and the second, and we do it in the order first, second, first again. This is because the update from the second path can put stale values into the nodes which are common to both paths, so doing the first once more makes everything correct. Nothing much to it.
+
+If both nodes lack the criteria, we merge them. Here we are directly removing a node, so practically all the representative changes happen in the second path. The logic I came up with is to find the node where the two paths meet, and then update the representatives the same way as in borrowing. For the second path, though, we need to shift one representative up, since we remove one primary key and one child from the node. So we pick the middle primary key, which is the representative, push it to its parent, then to that parent's parent, until we hit the top.
+
+After merging two nodes, there is a very high possibility that the parent is left with too few children, while we need it to stay above a certain threshold. So we go and check the parent. If it is low, we do the same stuff again: borrow children from the next node, or merge if that one is low too. This issue pretty much occurs only when we merge, so the same thing can keep repeating at each level, and we need to iterate over those as well.
+
+For this we make a loop. If the node's parent fulfils the threshold, we break. If not, we keep doing the same thing again and again. First we transfer all the info into the second stack. I have defined a second stack for the lender, and the first one is always for the borrower. The roles change here, so I did it this way for my better understanding. Then we go up the stack and check whether any node has another branch available for borrowing or merging, and we also track how many levels we need to go up. Once we find one, we move to the next branch and go to the very first node in that branch, as we want the exact next node. We fill the stack along this path and get the info we need.
+
+Then comes the second alarm. It checks all the parents to see whether the primary key (the representative) of that node appears anywhere in the upper levels.
+
+After that, two things can happen. If the next parent has more children than the threshold, we just borrow one. If it doesn't, we do the merge. In the borrowing part I decided to update only the lender's path, because that was the only thing that needed to change. The first path isn't that important to update, and the work can still be done without it.
+
+Then we check the same thing for the next parent. If it satisfies the threshold, we break. If not, we repeat the whole thing. We keep looping until the criteria are fulfilled. As this issue only occurs after a merge, the exit condition is simply that the threshold is fulfilled.
+
+There are two precautions built in. The first is the root check: starting from the very first node, we check how many children it has. If it has just one, we remove it, declare the child as the new root, and return it. The second is node validation. Since this is a B+ tree, every node needs to be sorted, so we check that in a few steps and report an error if it isn't. For the normal data nodes this is easy. For the internal nodes, we keep a range with us and check against it the same simple way.
+</script>
+</section>
+
+ 
+
+<section class="page" id="p15">
+<h1>Storage Engine / Buffer Pool</h1>
+<script type="text/plain" class="doc">
+buffer pool 
+
+Starting with the I/O stuff, reading and writing on the disk. If any page is required we directly use it from there. There is also one thing which is like we always track if the code is going into I/O or not, for the mutex purposes.
+
+Now there can be multiple people or users accessing the thing at the same time so it is quite important that we put a lock on each of the frames we are using.
+
+The backbone function of this whole thing is getting which frame is free so we can take that one and put the page in it. We have bitmaps for checking each frame, the similar way which was used in the FSM. If a frame is dead we pick it, else we just move to the next one. Now if none of the frames are dead we need to remove one that nobody is using, that responsibility is given to the clock algorithm. We have two options, if the request is forced we just get it directly, else we wait till the optimal condition is met. The clock function is called at timed intervals and each one has mutex locks on it.
+
+Now the clock algorithm tracks two things. The use count, how many threads are using the same frame, so if the use count is 0 we can remove it. And the clock counter, how many times that frame has been reviewed for eviction. Whichever frame has a bigger clock counter means it has been used more, so whichever is smaller we pick that one. If the type is forced we directly give the smaller one, else we decrement all clock counters by one and move on. If any hits zero we return that frame, else we just wait. When a frame is found we update the stats and if the frame is dirty we first write it back to the file before moving on. There is also a valid bit per frame, if the bit is valid only then we treat it as live, else it is already dead and we can use it directly.
+
+The background dirty writer is like at a regular interval we keep writing all the dirty pages back to the file, so things can be a bit faster, basically an optimization.
+
+A few of the normal functions now. Delete page, we get the input, put it in the lock, change the parameters and then write zeros to the whole page in the file. Insert page in frame, we get the page id, fetch the page from the file or cache or wherever it is and then put it in whichever frame we got from the clock. Insert the thing is the same, just the frame is updated as per the page number and we write it back to the file. Not in use get out basically just makes the frame dead, sets all parameters to dead and then the clock can remove it or reuse it later.
+
+A few stats are tracked to understand how well the buffer is working. Hits means the page asked is already present in a frame. Misses means the page is not in any frame. Clock is how many times the clock has been invoked. Evictions means no dead frame was found so we had to remove one that was not in use. Flushes means the frame was dirty so we had to write it back to the file first.
+
+There is also an advanced thing where if we are asking for a particular page we also tend to pre-fetch the nearby pages using an OS level read-ahead, so by the time we actually need those pages they are already in the cache. Implementation of this is still pending though.
+
+</script>
+</section>
+
+ 
+
+
+
+<section class="page" id="p17">
+<h1>Storage Engine / Data in Pages / Pages</h1>
+<script type="text/plain" class="doc">
+/* write docs here */
+</script>
+</section>
+
+ 
+
+<section class="page" id="p18">
+<h1>Storage Engine / Data in Pages / Pages Header</h1>
+<script type="text/plain" class="doc">
+Page Zero — Header
+
+The very first page in the pages is the header, also very well known as **page zero**. It pretty much contains all the major or, in general, information which we get from the CREATE queries which we write. So yeah, we get the CREATE parser, then we need to simplify the data in another struct and then put it in the file. This is known as the header.
+
+Struct Stored in the File
+
+Coming to the struct which we are storing in the file, we pretty much need to store the version and a specific number for recognising that this file belongs to this database engine. Then we have the page size, as each page contains a specific fixed size. Here I took **4096 bits**. Along with this, we have a different struct for the table information. That struct contains the table name, the root page (the page number), and the number of columns. It then extends to the column information, which is stored in a different struct. This struct contains all the basic column information which we get from the parser. Not going in deep because the stuff is already stated in the parser's documentation.
+
+Default Values
+
+We have a few functions specifically designed to just set default values to all the information in the structs. These are `default_column_info`, `default_table_info`, and `default_pagezero`.
+
+Main Function
+
+Coming to the main function now, this one pretty much calls the parser and gets the tree, and then we operate on that tree. We do take a hash for each of the columns so that multiple columns shouldn't come as it is a clear error. We make use of the function `hashnum` for getting the hash number for hashing. The normal bool functions like primary key, not null, etc. etc. are done here.
+
+Primary Key
+
+While we are on the primary keys, the thing was that in the CREATE parser we often tend to directly put the primary key as the root name and then define the column name directly. Now this can be an issue, as in the header we just want to know whether the column is a primary key or not directly.
+
+So we pretty much have a function called `take_care_of_stuff`, which looks at all the names, and if it finds the primary key as a root name, then we have the hash for the primary keys as well. When we move our cursor, we will look at the stuff and then directly turn the bool primary key on, more better.
+
+Default and Unique
+
+Also, if the default value is present, then the unique must not be present, else it is a problem. That condition is applied to the thing.
+
+Foreign Key
+
+Then, if the foreign key comes into play, we pretty much need three things: the name in the header for the column, the reference table, and the reference column. Now, the parser just gives normal stuff like normal query things. We need to get it simplified as well. That work is done by `do_the_foreign_key`.
+
+Writing the Page
+
+Once the struct is filled, this page is written in the file by the **page manager**.
+
+</script>
+</section>
+
+ 
+ 
+
+<section class="page" id="p19">
+<h1>Storage Engine / Pager</h1>
+<script type="text/plain" class="doc">
+The Pager
+
+This piece of code is merely responsible for getting the data which we have in the page. The page is a data structure made for storing all the data blobs which we have.
+
+Before anything, let’s just go and look at what exactly this structure carries. So first, the structure is like the slots, header, and the normal data. The slots have three things: offset, size, and primary key number. Now these kind of come in clutch when we need to remove some of the data and then replace it with something, put the data, and just update the slot. Easy as that.
+
+Coming to the header, we have the page_num, which is unique for each page. The page_type is intended to keep track of whether the page is used for normal purposes, hashing, or a TOAST table. Then we have current_offset and current_size. These are just for keeping track of the most recent insertion from the very back, so yeah, pretty much used for the temporary stuff. Then we have the free_size, which represents how much free size the entire page has, and the normal_free_size, which represents from the back of the last data to the end how much size is available. It represents the continuous free space available there. And then we have the dead_slots. These are the binary numbers for each and every slot in the page which basically look for if the slot is dead or not. I have used bit manipulation for this in its extent, so yeah.
+
+I am heavily inspired by the PostgreSQL storage engine for this version. The very first thing coming is the FSM. It is like wherever there is space to insert data, we insert it and manage all the space and put the data in it. That is the basic idea.
+
+get_page_from_file is used to get the page from the file. Suppose we have a page in which already something is present and we need that one thing, this function helps us to get it. Same is the get_pagezero purpose: just read the header from the file and then use it.
+
+find_the_size_of_stuff_get_the_data_and_get_the_primary_key_num — the bigger the name, the bigger its purpose is. We just have the data coming from the insert parser, but we do need to get the size of the entire data. Then the data is stored in the format of the blob, the data type, and then the data, and if the string is there, the size as well. Now we do need the primary keys as well if we need to sort it, which we of course do, so we get it from here as well. The header is passed, the data we got is passed, and then all these three essential things are gotten.
+
+Now coming on the main function, if there is enough space for the data to be in the page and also there is enough space to accommodate the data from the back, meaning there is no need to reshuffle anything, we just put the data directly in it with the updation of the slots.
+
+If the page has enough size but not the space from behind, we first check all the dead slots which are there from the bit manipulation from the struct which I talked about earlier. Each and every piece of data is picked and checked if it can accommodate the data, and then we move forward. If we found one, well and good, just put it in and update the sizes, as there can be some space left in the earlier slot if it was bigger and the new one is smaller, so that way.
+
+And even if that thing doesn't work, we need to rearrange everything. All the small, small spaces which are there and all the small dead slots which are of no use, we need to reshuffle all and then get the thing. We pretty much keep the pointer if the slot is not dead, keep the pointer to the tail of it, and move forward. Even if the new slots are dead or some space was left, we can just get it at the end so that we can end these internal fragmentations.
+
+So pretty much we do the memmove tool and shift all the data that way, and after that we just add the data which we had in the page. Simple as that.
+
+the upper part was of just inserting the new of the stuff but what if we need to update things that also is a pretty different thing so like yo u get the updated stuff and now you pretty much need to like put the new data in the page for the slotted work
+
+now see while inseertion some of the buffer space is kept purposely just for this stuff so yeah we use that now if the buffer space plus the space after the last slot we have space we just put some fo the required data to that slotted data and then insert stuff in it 
+
+but if we have the space but the buffer space plus the space after the last one doesnt permit means the there is internal fragmentation so we just have the rearrange every single thing and then we insert that part and then move on now see according to conditions like if the space is fitting in just normal free space no need for the buffer space or the inverse we need to update the sizes accordingly so that is one thing
+
+but lets say if literlly nothing of it works there is just no spacce we need to take the page half of it transfer to the next page and then liek split the page and then update the stuff and then move on why split because just we pretty much need to update stuff again and again so it is just convinenet so yeah 
+
+</script>
+</section>
+
+<section class="page" id="p20">
+<h1>Storage Engine / Pager / Toast Tables</h1>
+<script type="text/plain" class="doc">
+# Toast Tables
+
+Let’s say you have some data which is really, really big. What can we do now? Since a page has a fixed size, the complete data may not be able to fit inside a single page. This is where Toast Tables come in. Pretty much, we take the large data, divide it into smaller parts, arrange those parts across a set of pages, and keep a record that these particular pages contain the different parts of the Toast Table. We can then use those pages together whenever we need to access the complete data.
+
+We assign a number to each Toast Table chunk and put these chunks into a file which is specifically made to store the pages containing the Toast Table data. We then use another file as a map which specifically tracks all the pages, what number they have, where they are located, and all the other information required to access them. So whenever we need to retrieve the Toast Table, we can go through this map, get the file offset and slot number directly, and then use that information to access the required chunk.
+
+The `get_toast_table_file_header` function contains all the header information which is needed for this. Going through the header, it basically tracks how many pages are being used, how many chunks have been used, and information about the chunks. The Toast Table's actual content, which is the huge data that we are trying to store, is divided into chunks, and each chunk is given a chunk ID. We also have the dead-space information, which tells us where reusable space is available inside the pages. Whenever we have enough available space, we can use that space to insert another Toast Table chunk and then continue moving forward.
+
+The header also contains information about the map, such as which page offset the Toast Table chunk is located at and which chunk ID has been assigned to it. The `put_the_chunk_in_the_list` function handles this part. Whatever chunk we have inserted, we write its information into the map file and update the required information accordingly.
+
+Coming to the insertion of Toast Tables, the first thing we do is find the size of the Toast Table that we need to insert. We then check whether there is any dead space available that can be reused. If there is, we first find which page contains the available space. There is also a limit on how much free space is worth keeping track of. If a certain amount of space is available, we mark it as dead space so that it can be reused. Otherwise, if the space is too small, we simply consider the page full because managing such a small amount of space is not worth it.
+
+Once we find the page with available space, we check which slot is free and use that slot. The required information about the page, slot, offset, and the amount of data that can be stored is kept in the respective variables.
+
+One important thing to mention here is that I have not rearranged the slot numbers every time we flush the whole thing. Since we have already written all the slot information into the file, whenever we need to insert data into the space of a dead chunk, we simply rearrange the slot offsets and move the data around. Whatever space we find at the end is then filled with the new data, and a new slot is used for it. The reason for doing this is that Toast Table chunks are already quite large, so the additional cost of rearranging the data and slots is acceptable.
+
+The whole insertion process runs inside a loop. We continue moving through the loop until the complete Toast Table has been written. Each iteration handles as much of the remaining Toast Table data as possible, writes the required information, updates the map, and then continues with whatever data is still left.
+
+Once we have found some available space, we check whether the page can accommodate the amount of Toast Table data that is still left. If the page can fit the whole remaining data, we simply put the entire thing into the page. We also keep some buffer space in consideration. The idea is that if only a small amount of data cannot be fitted, we should be able to accommodate that small amount without having to repeatedly search for another page.
+
+After accommodating the data, we check how much space is left in the page. As mentioned earlier, only if the remaining space is greater than `612` bytes do we mark it as dead/free space. If the remaining space is less than or equal to `612` bytes, we simply consider the page full because maintaining such a small amount of free space is not worth the overhead.
+
+If the page cannot accommodate the whole remaining Toast Table data, we reduce the amount of data that we are currently inserting to whatever can fit into the page. We write that portion into the page, update the map with the corresponding chunk information, and then continue the loop with the remaining Toast Table data.
+
+The same thing happens when the page can accommodate the remaining data completely. In that case, we write the data into the page, check the remaining space, mark the space as dead if it is greater than `612` bytes, update the required information in the map, and then the Toast Table insertion is complete.
+
+Now, if there is no dead space available at all, we need to create a new page. We first check the size of the remaining Toast Table data against the usable size of a new page. If the remaining data is larger than what the page can hold, we copy as much data as the page can accommodate, mark the page as used, write it to the file, put its information into the map, and then move forward with the loop to handle the remaining data.
+
+If the remaining Toast Table data can completely fit inside the new page, we put the complete data into the page. We then check how much space remains after the insertion. If the remaining space is greater than `612` bytes, we declare that space as dead space so that it can be reused later. If it is less than or equal to `612` bytes, we simply declare the page full. Finally, we put the chunk information into the map and the Toast Table insertion is done.
+
+</script>
+</section>
+
+ 
+ 
+ 
+<section class="page" id="p21">
+<h1>VM Bytecodes</h1>
+<script type="text/plain" class="doc">
+Execution Layer: Bytecode Code Generation
+
+With the SQL tree built, the next step is code generation, which turns the tree into a list of small instructions called bytecodes. I'm building this bottom-up, so I started with the SQLite bytecode documentation. Each instruction has an opcode and four operands, P1 to P4. P1 to P3 are integers, and P4 is a backup slot for things that don't fit an integer, such as strings, nulls, or collation info. All operations happen in registers, which hold the working data. Each register stores a type, a value (integer, float, or string), and a length for blobs and strings. Blobs are used for things like image URLs. Every opcode uses P1 to P4 differently, so I documented each one.
+
+Basic Opcodes
+
+begin_op does nothing meaningful, goto_op jumps to the instruction number in P2, and halt stops execution and returns nothing. integer_op and real_op load the number in P1 into register P2, while string_op and blob_op load the value in P4 (a string, or a URL for images) into register P2, with its length in P1. copy_op copies register P1 into register P2, and move_op does the same but frees P1 afterwards.
+
+The arithmetic opcodes (add_op, subs_op, mul_op, divide_op) take their operands from P1 and P2 and write the result to register P3. If one operand is an integer and the other a float, the integer is converted to a float first and the result is a float. The comparison opcodes (gt, eq, lt, ge, le) compare the registers in P1 and P3 and jump to the instruction in P2 if the condition is true. P4 holds the comparison mode for strings, such as binary or nocase, and the same integer-to-float conversion applies.
+
+Cursor Operations
+
+The cursor structure tracks everything needed to walk the B-tree. It holds the root page number where traversal starts, the current page number and row number, whether the current node is a leaf, the mode, and the stack depth. It also holds a stack of (page number, cell index) pairs for every node on the path, the database file used to check that the requested columns exist, and boolean flags for reaching the start or end of the data.
+
+open_read_op and open_write_op create this structure, one variant for reading and one for writing. The cursor knows which table it works on through the special db file. close_cursor frees everything the cursor stored. Only P2 is used, to say which cursor to act on.
+
+For next_cursor, every node on the current path is kept in the stack so the cursor can retrace its steps. When a node runs out of cells, the cursor goes back up to the parent and checks whether the parent's current index is still below its capacity. If so, it moves to the next child there. If not, it keeps climbing, pushing the new nodes back onto the stack as it descends. prev_cursor uses the same logic in reverse. rewind_cursor and cursor_end simply descend until they reach a leaf, landing on the first or last entry of the tree.
+
+The seek operation finds the first entry whose value is at least the value in the register given by P1. When it reaches a node, it runs a binary search over that node's children rather than a linear scan. The tree header stores the highest value in each node, which tells the search which direction to go. If the key isn't found, the search moves on to the next parent, using the same logic as next_cursor. The struct stores the total number of entries, so I can track how many children have been covered. A few helper functions read positional data from the file for the comparisons.
+
+Aggregate Functions
+
+The aggregate struct holds separate registers for min, max, and total (for arithmetic), plus a "have value" flag used when comparing for min and max. It also keeps a count, used for avg and count, and a concat string for string-concatenation aggregates. aggregate_step keeps one such struct per aggregate function and updates it on every row according to the operation, with P2 giving the register being accumulated. aggregate_final then copies the accumulated result into the register in P3 for later use.
+
+Sorting
+
+The sorter struct holds the row count, the capacity, the number of key columns to sort on, which columns they are, and the key info (asc or desc, plus string comparison rules). It also holds the row data. Each row is stored as a blob built at make-record time that contains every column's value, along with the length of the sort key, the key value, and its type.
+
+sorter_open creates this struct, with P2 giving the columns to sort on and P4 giving the key info, which has its own struct. sorter_insert adds a row, growing the capacity when the count reaches it and reallocating memory to fit the new row's length before storing it.
+
+sorter_sort sorts the stored rows using qsort from the C library. It takes the array, the number of items, the item size, and a comparison function, which behaves like ge_op and honors the sort directions in the key info. A helper function extracts the value to compare. A row like 23|varad|21 is stored in the blob as the type plus the data for each field, and string fields also store their length. The helper moves to the right offset in the blob, reads the type, the length (for strings), and the data, and returns them for comparison.
+</script>
+</section>
+
+   
+
+</main>
+
+<script>
+  // Turns every docs block into readable text.
+  document.querySelectorAll("script.doc").forEach(function (s) {
+    var d = document.createElement("div");
+    d.className = "doc";
+    d.textContent = s.textContent.trim();
+    s.replaceWith(d);
+  });
+
+  // Shows the page that matches the link clicked.
+  function show() {
+    var id = location.hash.slice(1);
+    var page = id && document.getElementById(id);
+    document.querySelectorAll(".page").forEach(function (p) { p.style.display = "none"; });
+    document.getElementById("welcome").style.display = page ? "none" : "block";
+    if (page) page.style.display = "block";
+    document.querySelectorAll("nav a").forEach(function (a) {
+      a.classList.toggle("active", a.getAttribute("href") === "#" + id);
+    });
+    document.querySelector("main").scrollTop = 0;
+  }
+  window.addEventListener("hashchange", show);
+  show();
+</script>
+</body>
+</html>
